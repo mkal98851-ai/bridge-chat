@@ -162,7 +162,7 @@
     font-size:10px; opacity:0.6; margin-top:3px; text-align:right;
   }
 
-  .bubble img{ max-width:100%; border-radius:10px; display:block; margin-bottom:4px; }
+  .bubble img{ max-width:150px; max-height:150px; width:auto; height:auto; border-radius:10px; display:block; margin-bottom:4px; object-fit:cover; cursor:pointer; }
   .file-card{
     display:flex; align-items:center; gap:10px; padding:8px; border-radius:10px;
     background:rgba(0,0,0,0.15); margin-bottom:4px; min-width:180px;
@@ -803,11 +803,12 @@ fileInput.onchange = () => {
   fileInput.value = '';
 };
 
-function renderOutgoingFileRow(id, name, size, isImage, groupId, replyTo){
+function renderOutgoingFileRow(id, name, size, isImage, groupId, replyTo, previewUrl){
   const row = document.createElement('div');
   row.className = 'msg-row me';
   row.id = 'msgrow-' + id;
   row.innerHTML = '<div class="bubble">' + renderReplyQuoteHtml(replyTo) +
+    (isImage && previewUrl ? '<img src="' + previewUrl + '">' : '') +
     '<div class="file-card">' +
       '<div class="fc-icon">' + (isImage ? '\u{1F5BC}\uFE0F' : '\u{1F4C4}') + '</div>' +
       '<div class="fc-info">' +
@@ -824,6 +825,8 @@ function renderOutgoingFileRow(id, name, size, isImage, groupId, replyTo){
   messagesEl.appendChild(row);
   messageMeta[id] = { type: 'file', mine: true, sender: myId, name, groupId };
   attachLongPress(row.querySelector('.bubble'), id);
+  const img = row.querySelector('.bubble img');
+  if(img) img.onclick = () => window.open(previewUrl, '_blank');
   scrollToBottom();
 }
 
@@ -855,6 +858,7 @@ function sendFile(file){
     return;
   }
   const isImage = file.type.startsWith('image/');
+  const previewUrl = isImage ? URL.createObjectURL(file) : null;
   const groupId = db.ref('rooms/' + roomCode + '/fileChunks').push().key;
   const msgRef = messagesRef.push();
   const msgId = msgRef.key;
@@ -862,7 +866,7 @@ function sendFile(file){
   const replyPayload = replyingTo ? { id: replyingTo.id, sender: replyingTo.sender, preview: replyingTo.preview } : null;
   if(replyingTo){ replyingTo = null; actionBarEl.style.display = 'none'; }
 
-  renderOutgoingFileRow(msgId, file.name, file.size, isImage, groupId, replyPayload);
+  renderOutgoingFileRow(msgId, file.name, file.size, isImage, groupId, replyPayload, previewUrl);
 
   uploadFileChunks(file, groupId, msgId).then((chunkCount) => {
     const payload = {
@@ -916,6 +920,7 @@ function addFileBubble(id, msg){
     if(msg.isImage){
       const img = document.createElement('img');
       img.src = url;
+      img.onclick = () => window.open(url, '_blank');
       r.querySelector('.bubble').insertBefore(img, card);
     }
     const dlBtn = document.createElement('button');
