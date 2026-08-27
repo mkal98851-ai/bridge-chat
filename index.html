@@ -279,7 +279,7 @@
   /* Fullscreen image preview viewer */
   #imgViewer{
     position:fixed; inset:0; z-index:400; display:none;
-    align-items:center; justify-content:center; background:rgba(0,0,0,0.92);
+    align-items:center; justify-content:center; flex-direction:column; background:rgba(0,0,0,0.92);
   }
   #imgViewer.show{ display:flex; }
   #imgViewer img{
@@ -290,6 +290,46 @@
     background:rgba(255,255,255,0.08); border:none; color:#fff; font-size:20px; cursor:pointer;
     display:flex; align-items:center; justify-content:center; z-index:2;
   }
+  #imgViewer .iv-header{
+    position:absolute; top:0; left:0; right:0; padding:16px 60px 20px 18px;
+    background:linear-gradient(rgba(0,0,0,0.65), transparent); text-align:left; z-index:1;
+  }
+  #imgViewer .iv-name{ font-size:14px; font-weight:600; color:#fff; word-break:break-all; }
+  #imgViewer .iv-size{ font-size:12px; color:rgba(255,255,255,0.7); margin-top:2px; }
+  #imgViewer .iv-navrow{
+    display:flex; align-items:center; justify-content:center; gap:36px; margin-top:16px;
+  }
+  #imgViewer .iv-navrow.hidden{ display:none; }
+  #imgViewer .iv-nav{
+    width:44px; height:44px; border-radius:50%; background:rgba(255,255,255,0.1); border:none;
+    color:#fff; font-size:20px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  #imgViewer .iv-nav:active{ background:rgba(255,255,255,0.22); }
+  #imgViewer .iv-counter{ font-size:12.5px; color:rgba(255,255,255,0.75); min-width:44px; text-align:center; }
+
+  /* Image grid (single / multiple grouped images) */
+  .img-group{ display:grid; gap:3px; width:220px; border-radius:12px; overflow:hidden; margin-bottom:2px; }
+  .img-group.n1{ display:block; width:auto; }
+  .img-group.n2{ grid-template-columns:repeat(2,1fr); }
+  .img-group.n3{ grid-template-columns:repeat(2,1fr); }
+  .img-group.n3 .img-tile:nth-child(3){ grid-column:1/3; }
+  .img-group.n4plus{ grid-template-columns:repeat(2,1fr); grid-template-rows:repeat(2,1fr); }
+  .img-tile{ position:relative; aspect-ratio:1/1; overflow:hidden; cursor:pointer; }
+  .img-group.n1 .img-tile{ aspect-ratio:auto; }
+  .img-tile img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .img-group.n1 .img-tile img{ width:auto; height:auto; max-width:220px; max-height:220px; object-fit:cover; }
+  .img-tile .more-overlay{
+    position:absolute; inset:0; background:rgba(0,0,0,0.55); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:20px; font-weight:700;
+  }
+  .img-status{ font-size:10.5px; color:var(--text-dim); margin:2px 2px 0; }
+  .img-status.img-status-sending{ color:#000; font-weight:700; }
+  .img-dl-row{ display:flex; justify-content:flex-end; margin-top:4px; }
+  .img-dl-btn{
+    width:26px; height:26px; border-radius:50%; background:rgba(0,0,0,0.35); border:none;
+    color:#fff; font-size:12px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  .img-dl-btn[disabled]{ opacity:0.35; cursor:not-allowed; }
 </style>
 </head>
 <body>
@@ -362,8 +402,17 @@
   <div class="dz-sub">File / Image bhejne ke liye chhod dein</div>
 </div>
 <div id="imgViewer">
+  <div class="iv-header">
+    <div class="iv-name" id="imgViewerName"></div>
+    <div class="iv-size" id="imgViewerSize"></div>
+  </div>
   <button class="iv-close" id="imgViewerClose">✕</button>
   <img id="imgViewerImg" src="" alt="preview">
+  <div class="iv-navrow" id="imgViewerNavRow">
+    <button class="iv-nav iv-prev" id="imgViewerPrev">←</button>
+    <div class="iv-counter" id="imgViewerCounter"></div>
+    <button class="iv-nav iv-next" id="imgViewerNext">→</button>
+  </div>
 </div>
 
 <script>
@@ -581,7 +630,9 @@ function startReply(id){
   const meta = messageMeta[id];
   if(!meta) return;
   editingId = null;
-  const preview = meta.type === 'file' ? ('📎 ' + meta.name) : meta.text;
+  const preview = meta.type === 'file' ? ('📎 ' + meta.name)
+    : meta.type === 'imagegroup' ? ('🖼️ ' + (meta.count > 1 ? (meta.count + ' photos') : meta.name))
+    : meta.text;
   replyingTo = { id, sender: meta.sender, preview };
   actionBarTitleEl.textContent = 'Reply';
   actionBarTextEl.textContent = preview;
@@ -611,6 +662,11 @@ function deleteMessage(id){
   if(meta.type === 'file' && meta.groupId){
     db.ref('rooms/' + roomCode + '/fileChunks/' + meta.groupId).remove()
       .catch(err => dlog('ERROR deleting file chunks: ' + err.message));
+  } else if(meta.type === 'imagegroup' && meta.groupIds){
+    meta.groupIds.forEach(gid => {
+      db.ref('rooms/' + roomCode + '/fileChunks/' + gid).remove()
+        .catch(err => dlog('ERROR deleting image chunks: ' + err.message));
+    });
   }
   if(replyingTo && replyingTo.id === id) cancelActionBar();
   if(editingId === id) cancelActionBar();
@@ -722,6 +778,8 @@ function setupListeners(){
       addTextBubble(key, msg.text, false, msg.time, msg.replyTo, msg.edited, msg.sender);
     } else if(msg.type === 'file'){
       addFileBubble(key, msg);
+    } else if(msg.type === 'imagegroup'){
+      addImageGroupBubble(key, msg);
     } else if(msg.type === 'sys'){
       addSysMessage(msg.text, key);
     }
@@ -838,19 +896,55 @@ function sendText(){
   if(replyingTo){ replyingTo = null; actionBarEl.style.display = 'none'; }
 }
 
-/* ---------- Fullscreen image preview viewer ---------- */
+/* ---------- Fullscreen image preview viewer (with group navigation) ---------- */
 const imgViewer = document.getElementById('imgViewer');
 const imgViewerImg = document.getElementById('imgViewerImg');
 const imgViewerClose = document.getElementById('imgViewerClose');
-function openImagePreview(src){
-  imgViewerImg.src = src;
+const imgViewerNavRow = document.getElementById('imgViewerNavRow');
+const imgViewerPrev = document.getElementById('imgViewerPrev');
+const imgViewerNext = document.getElementById('imgViewerNext');
+const imgViewerCounter = document.getElementById('imgViewerCounter');
+let previewEntries = [];
+let previewIndex = 0;
+
+function renderPreviewFrame(){
+  const e = previewEntries[previewIndex];
+  if(!e) return;
+  imgViewerImg.src = e.url;
+  document.getElementById('imgViewerName').textContent = e.name || '';
+  document.getElementById('imgViewerSize').textContent = (e.size != null) ? fmtSize(e.size) : '';
+  if(previewEntries.length > 1){
+    imgViewerNavRow.classList.remove('hidden');
+    imgViewerCounter.textContent = (previewIndex + 1) + ' / ' + previewEntries.length;
+  } else {
+    imgViewerNavRow.classList.add('hidden');
+  }
+}
+function openImagePreview(entries, idx){
+  previewEntries = Array.isArray(entries) ? entries : [entries];
+  previewIndex = idx || 0;
+  renderPreviewFrame();
   imgViewer.classList.add('show');
 }
 function closeImagePreview(){
   imgViewer.classList.remove('show');
   imgViewerImg.src = '';
+  previewEntries = [];
+  previewIndex = 0;
+}
+function showPrevPreview(){
+  if(!previewEntries.length) return;
+  previewIndex = (previewIndex - 1 + previewEntries.length) % previewEntries.length;
+  renderPreviewFrame();
+}
+function showNextPreview(){
+  if(!previewEntries.length) return;
+  previewIndex = (previewIndex + 1) % previewEntries.length;
+  renderPreviewFrame();
 }
 imgViewerClose.onclick = closeImagePreview;
+imgViewerPrev.onclick = showPrevPreview;
+imgViewerNext.onclick = showNextPreview;
 imgViewer.addEventListener('click', (e) => {
   if(e.target === imgViewer) closeImagePreview();
 });
@@ -859,9 +953,18 @@ const attachBtn = document.getElementById('attachBtn');
 const fileInput = document.getElementById('fileInput');
 attachBtn.onclick = () => fileInput.click();
 fileInput.onchange = () => {
-  Array.from(fileInput.files).forEach(f => sendFile(f));
+  handleIncomingFiles(fileInput.files);
   fileInput.value = '';
 };
+
+function handleIncomingFiles(fileList){
+  const files = Array.from(fileList || []);
+  if(!files.length) return;
+  const images = files.filter(f => f.type && f.type.startsWith('image/'));
+  const others = files.filter(f => !(f.type && f.type.startsWith('image/')));
+  if(images.length) sendImageGroup(images);
+  others.forEach(f => sendFile(f));
+}
 
 /* ---------- Drag & Drop support ---------- */
 const dropOverlay = document.getElementById('dropOverlay');
@@ -900,8 +1003,192 @@ window.addEventListener('drop', (e) => {
   if(!e.dataTransfer) return;
   const files = Array.from(e.dataTransfer.files || []);
   if(!files.length) return;
-  files.forEach(f => sendFile(f));
+  handleIncomingFiles(files);
 });
+
+/* ---------- Grouped image messages (grid + single download) ---------- */
+function buildImageGridMarkup(id, entries, sending){
+  const total = entries.length;
+  const visibleCount = Math.min(total, 4);
+  let cls = 'img-group';
+  if(total === 1) cls += ' n1';
+  else if(total === 2) cls += ' n2';
+  else if(total === 3) cls += ' n3';
+  else cls += ' n4plus';
+
+  let tiles = '';
+  for(let i=0;i<visibleCount;i++){
+    const e = entries[i];
+    const isLastDimmed = (total > 4 && i === visibleCount - 1);
+    tiles += '<div class="img-tile" data-idx="' + i + '">' +
+      '<img src="' + e.url + '" draggable="false">' +
+      (isLastDimmed ? '<div class="more-overlay">+' + (total - visibleCount) + '</div>' : '') +
+    '</div>';
+  }
+  const statusHtml = sending ? '<div class="img-status img-status-sending" id="imgstatus-' + id + '">Sending File 0%</div>' : '';
+  const dlDisabledAttr = sending ? ' disabled' : '';
+  return '<div class="' + cls + '" id="imggrid-' + id + '">' + tiles + '</div>' +
+    statusHtml +
+    '<div class="img-dl-row"><button class="img-dl-btn" id="imgdl-' + id + '" title="Download"' + dlDisabledAttr + '>⬇️</button></div>';
+}
+
+function wireImageGrid(id, entries){
+  const grid = document.getElementById('imggrid-' + id);
+  if(grid){
+    grid.querySelectorAll('.img-tile').forEach((tile) => {
+      const idx = parseInt(tile.dataset.idx, 10);
+      tile.addEventListener('click', () => {
+        openImagePreview(entries, idx);
+      });
+    });
+  }
+  const dlBtn = document.getElementById('imgdl-' + id);
+  if(dlBtn){
+    dlBtn.onclick = () => downloadAllImages(entries);
+  }
+}
+
+function downloadAllImages(entries){
+  entries.forEach((e, i) => {
+    setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = e.url; a.download = e.name;
+      document.body.appendChild(a); a.click(); a.remove();
+    }, i * 350);
+  });
+}
+
+function finalizeImageGroupOutgoing(rowId){
+  const statusEl = document.getElementById('imgstatus-' + rowId);
+  if(statusEl) statusEl.style.display = 'none';
+  const dlBtn = document.getElementById('imgdl-' + rowId);
+  if(dlBtn) dlBtn.removeAttribute('disabled');
+}
+
+function renderImageGroupOutgoing(id, files, replyTo){
+  const row = document.createElement('div');
+  row.className = 'msg-row me';
+  row.id = 'msgrow-' + id;
+  const entries = files.map(f => ({ url: URL.createObjectURL(f), name: f.name, size: f.size }));
+  row.innerHTML = '<div class="bubble">' + renderReplyQuoteHtml(replyTo) +
+    buildImageGridMarkup(id, entries, true) +
+    '<div class="time">' + nowTime() + '</div>' +
+  '</div>';
+  messagesEl.appendChild(row);
+  wireImageGrid(id, entries);
+  messageMeta[id] = { type: 'imagegroup', mine: true, sender: myId, count: files.length, name: files[0].name };
+  attachLongPress(row.querySelector('.bubble'), id);
+  scrollToBottom();
+}
+
+async function uploadImageGroupChunks(files, groupIds, rowId){
+  const totalBytes = files.reduce((a, f) => a + f.size, 0) || 1;
+  let sentBytes = 0;
+  const chunkCounts = [];
+  for(let fi=0; fi<files.length; fi++){
+    const file = files[fi];
+    const groupId = groupIds[fi];
+    const total = file.size;
+    const chunkCount = Math.max(1, Math.ceil(total / CHUNK_RAW_SIZE));
+    for(let i=0;i<chunkCount;i++){
+      const start = i * CHUNK_RAW_SIZE;
+      const end = Math.min(total, start + CHUNK_RAW_SIZE);
+      const slice = file.slice(start, end);
+      const buf = await slice.arrayBuffer();
+      const b64 = abToBase64(buf);
+      await db.ref('rooms/' + roomCode + '/fileChunks/' + groupId + '/' + i).set(b64);
+      sentBytes += (end - start);
+      const pct = Math.round((sentBytes / totalBytes) * 100);
+      const statusEl = document.getElementById('imgstatus-' + rowId);
+      if(statusEl) statusEl.textContent = 'Sending File ' + pct + '%';
+    }
+    chunkCounts.push(chunkCount);
+  }
+  return chunkCounts;
+}
+
+function sendImageGroup(files){
+  if(!messagesRef){ addSysMessage('Room join nahi hai'); return; }
+  const valid = [];
+  for(const f of files){
+    if(f.size > MAX_FILE_MB * 1024 * 1024){
+      addSysMessage('"' + f.name + '" bahut badi hai (max ' + MAX_FILE_MB + 'MB)');
+      continue;
+    }
+    valid.push(f);
+  }
+  if(!valid.length) return;
+
+  const msgRef = messagesRef.push();
+  const msgId = msgRef.key;
+  seenMessageIds.add(msgId);
+  const replyPayload = replyingTo ? { id: replyingTo.id, sender: replyingTo.sender, preview: replyingTo.preview } : null;
+  if(replyingTo){ replyingTo = null; actionBarEl.style.display = 'none'; }
+
+  renderImageGroupOutgoing(msgId, valid, replyPayload);
+  const groupIds = valid.map(() => db.ref('rooms/' + roomCode + '/fileChunks').push().key);
+  if(messageMeta[msgId]) messageMeta[msgId].groupIds = groupIds;
+
+  uploadImageGroupChunks(valid, groupIds, msgId).then((chunkCounts) => {
+    const images = valid.map((f, i) => ({
+      name: f.name, size: f.size, mime: f.type, groupId: groupIds[i], chunkCount: chunkCounts[i]
+    }));
+    const payload = { type: 'imagegroup', sender: myId, time: nowTime(), images };
+    if(replyPayload) payload.replyTo = replyPayload;
+    return msgRef.set(payload);
+  }).then(() => {
+    dlog('Image group upload complete: ' + valid.length + ' image(s)');
+    finalizeImageGroupOutgoing(msgId);
+  }).catch((err) => {
+    dlog('ERROR uploading image group: ' + err.message);
+    addSysMessage('Image bhejne mein error: ' + err.message);
+  });
+}
+
+function addImageGroupBubble(id, msg){
+  const row = document.createElement('div');
+  row.className = 'msg-row them';
+  row.id = 'msgrow-' + id;
+  row.innerHTML = '<div class="bubble">' + renderReplyQuoteHtml(msg.replyTo) +
+    '<div class="img-status" id="imgstatus-' + id + '">Photos load ho rahi hain...</div>' +
+    '<div class="time">' + (msg.time || nowTime()) + '</div>' +
+  '</div>';
+  messagesEl.appendChild(row);
+  messageMeta[id] = {
+    type: 'imagegroup', mine: false, sender: msg.sender,
+    count: msg.images.length, name: msg.images[0].name,
+    groupIds: msg.images.map(im => im.groupId)
+  };
+  attachLongPress(row.querySelector('.bubble'), id);
+  scrollToBottom();
+
+  Promise.all(msg.images.map((imgSpec) =>
+    db.ref('rooms/' + roomCode + '/fileChunks/' + imgSpec.groupId).once('value').then((snap) => {
+      const val = snap.val() || {};
+      const parts = [];
+      for(let i=0;i<imgSpec.chunkCount;i++){
+        const b64 = val[i];
+        if(!b64){ dlog('Missing chunk ' + i + ' for ' + imgSpec.name); continue; }
+        parts.push(base64ToBytes(b64));
+      }
+      const blob = new Blob(parts, { type: imgSpec.mime });
+      return { url: URL.createObjectURL(blob), name: imgSpec.name, size: imgSpec.size };
+    })
+  )).then((entries) => {
+    const r = document.getElementById('msgrow-' + id);
+    if(!r) return;
+    const bubble = r.querySelector('.bubble');
+    const statusEl = document.getElementById('imgstatus-' + id);
+    if(statusEl) statusEl.remove();
+    const timeEl = bubble.querySelector('.time');
+    const gridHtml = buildImageGridMarkup(id, entries, false);
+    if(timeEl) timeEl.insertAdjacentHTML('beforebegin', gridHtml);
+    else bubble.insertAdjacentHTML('beforeend', gridHtml);
+    wireImageGrid(id, entries);
+  }).catch((err) => {
+    dlog('ERROR fetching image group chunks: ' + err.message);
+  });
+}
 
 function renderOutgoingFileRow(id, file, isImage, groupId, replyTo){
   const row = document.createElement('div');
@@ -927,7 +1214,7 @@ function renderOutgoingFileRow(id, file, isImage, groupId, replyTo){
     const localUrl = URL.createObjectURL(file);
     const img = document.createElement('img');
     img.src = localUrl;
-    img.onclick = () => openImagePreview(localUrl);
+    img.onclick = () => openImagePreview([{ url: localUrl, name, size }], 0);
     const card = row.querySelector('.file-card');
     row.querySelector('.bubble').insertBefore(img, card);
   }
@@ -959,11 +1246,15 @@ async function uploadFileChunks(file, groupId, rowId){
 
 function sendFile(file){
   if(!messagesRef){ addSysMessage('Room join nahi hai'); return; }
+  if(file.type && file.type.startsWith('image/')){
+    sendImageGroup([file]);
+    return;
+  }
   if(file.size > MAX_FILE_MB * 1024 * 1024){
     addSysMessage('"' + file.name + '" bahut badi hai (max ' + MAX_FILE_MB + 'MB)');
     return;
   }
-  const isImage = file.type.startsWith('image/');
+  const isImage = false;
   const groupId = db.ref('rooms/' + roomCode + '/fileChunks').push().key;
   const msgRef = messagesRef.push();
   const msgId = msgRef.key;
@@ -1025,7 +1316,7 @@ function addFileBubble(id, msg){
     if(msg.isImage){
       const img = document.createElement('img');
       img.src = url;
-      img.onclick = () => openImagePreview(url);
+      img.onclick = () => openImagePreview([{ url, name: msg.name, size: msg.size }], 0);
       r.querySelector('.bubble').insertBefore(img, card);
     }
     const dlBtn = document.createElement('button');
