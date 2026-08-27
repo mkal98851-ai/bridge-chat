@@ -171,6 +171,7 @@
   .file-card .fc-icon{ font-size:22px; flex-shrink:0; }
   .file-card .fc-info{ flex:1; min-width:0; }
   .file-card .fc-name{ font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .file-card.is-image .fc-name{ font-size:10.5px; font-weight:500; opacity:0.75; }
   .file-card .fc-size{ font-size:11px; opacity:0.7; }
   .file-card .fc-progress{ height:2px; background:rgba(0,0,0,0.2); border-radius:2px; margin-top:5px; overflow:hidden; }
   .file-card .fc-progress-fill{ height:100%; background:currentColor; width:0%; transition:width .2s; }
@@ -256,6 +257,39 @@
     opacity:0; transition:opacity .2s; pointer-events:none;
   }
   .toast.show{ opacity:1; }
+
+  /* Chhoti image preview - bubble ke andar bada dikhne se rokne ke liye */
+  .bubble img{
+    max-width:220px; max-height:220px; width:auto; height:auto;
+    object-fit:cover; border-radius:10px; display:block; margin-bottom:4px; cursor:pointer;
+  }
+
+  /* Drag & Drop overlay */
+  #dropOverlay{
+    position:fixed; inset:0; z-index:300; display:none;
+    align-items:center; justify-content:center; flex-direction:column; gap:10px;
+    background:rgba(10,15,20,0.9); border:3px dashed var(--signal);
+    color:var(--text); text-align:center; padding:24px; pointer-events:none;
+  }
+  #dropOverlay.show{ display:flex; }
+  #dropOverlay .dz-icon{ font-size:42px; }
+  #dropOverlay .dz-title{ font-size:16px; font-weight:700; }
+  #dropOverlay .dz-sub{ font-size:12.5px; color:var(--text-dim); }
+
+  /* Fullscreen image preview viewer */
+  #imgViewer{
+    position:fixed; inset:0; z-index:400; display:none;
+    align-items:center; justify-content:center; background:rgba(0,0,0,0.92);
+  }
+  #imgViewer.show{ display:flex; }
+  #imgViewer img{
+    max-width:94vw; max-height:88vh; object-fit:contain; border-radius:8px;
+  }
+  #imgViewer .iv-close{
+    position:absolute; top:16px; right:16px; width:40px; height:40px; border-radius:50%;
+    background:rgba(255,255,255,0.08); border:none; color:#fff; font-size:20px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; z-index:2;
+  }
 </style>
 </head>
 <body>
@@ -322,6 +356,15 @@
 <div id="ctxBackdrop"></div>
 <div id="ctxMenu"></div>
 <div class="toast" id="toast"></div>
+<div id="dropOverlay">
+  <div class="dz-icon">📥</div>
+  <div class="dz-title">Yahan drop karein</div>
+  <div class="dz-sub">File / Image bhejne ke liye chhod dein</div>
+</div>
+<div id="imgViewer">
+  <button class="iv-close" id="imgViewerClose">✕</button>
+  <img id="imgViewerImg" src="" alt="preview">
+</div>
 
 <script>
 const firebaseConfig = {
@@ -795,6 +838,23 @@ function sendText(){
   if(replyingTo){ replyingTo = null; actionBarEl.style.display = 'none'; }
 }
 
+/* ---------- Fullscreen image preview viewer ---------- */
+const imgViewer = document.getElementById('imgViewer');
+const imgViewerImg = document.getElementById('imgViewerImg');
+const imgViewerClose = document.getElementById('imgViewerClose');
+function openImagePreview(src){
+  imgViewerImg.src = src;
+  imgViewer.classList.add('show');
+}
+function closeImagePreview(){
+  imgViewer.classList.remove('show');
+  imgViewerImg.src = '';
+}
+imgViewerClose.onclick = closeImagePreview;
+imgViewer.addEventListener('click', (e) => {
+  if(e.target === imgViewer) closeImagePreview();
+});
+
 const attachBtn = document.getElementById('attachBtn');
 const fileInput = document.getElementById('fileInput');
 attachBtn.onclick = () => fileInput.click();
@@ -803,12 +863,53 @@ fileInput.onchange = () => {
   fileInput.value = '';
 };
 
-function renderOutgoingFileRow(id, name, size, isImage, groupId, replyTo){
+/* ---------- Drag & Drop support ---------- */
+const dropOverlay = document.getElementById('dropOverlay');
+let dragCounter = 0;
+
+function isChatActive(){
+  const cs = document.getElementById('chatScreen');
+  return cs.style.display === 'flex';
+}
+
+window.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  if(!isChatActive()) return;
+  dragCounter++;
+  dropOverlay.classList.add('show');
+});
+window.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  if(!isChatActive()) return;
+  if(e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  if(!isChatActive()) return;
+  dragCounter--;
+  if(dragCounter <= 0){
+    dragCounter = 0;
+    dropOverlay.classList.remove('show');
+  }
+});
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  if(!isChatActive()) return;
+  dragCounter = 0;
+  dropOverlay.classList.remove('show');
+  if(!e.dataTransfer) return;
+  const files = Array.from(e.dataTransfer.files || []);
+  if(!files.length) return;
+  files.forEach(f => sendFile(f));
+});
+
+function renderOutgoingFileRow(id, file, isImage, groupId, replyTo){
   const row = document.createElement('div');
   row.className = 'msg-row me';
   row.id = 'msgrow-' + id;
+  const name = file.name, size = file.size;
   row.innerHTML = '<div class="bubble">' + renderReplyQuoteHtml(replyTo) +
-    '<div class="file-card">' +
+    '<div class="file-card' + (isImage ? ' is-image' : '') + '">' +
       '<div class="fc-icon">' + (isImage ? '\u{1F5BC}\uFE0F' : '\u{1F4C4}') + '</div>' +
       '<div class="fc-info">' +
         '<div class="fc-name">' + escapeHtml(name) + '</div>' +
@@ -822,6 +923,14 @@ function renderOutgoingFileRow(id, name, size, isImage, groupId, replyTo){
     '<div class="time">' + nowTime() + '</div>' +
   '</div>';
   messagesEl.appendChild(row);
+  if(isImage){
+    const localUrl = URL.createObjectURL(file);
+    const img = document.createElement('img');
+    img.src = localUrl;
+    img.onclick = () => openImagePreview(localUrl);
+    const card = row.querySelector('.file-card');
+    row.querySelector('.bubble').insertBefore(img, card);
+  }
   messageMeta[id] = { type: 'file', mine: true, sender: myId, name, groupId };
   attachLongPress(row.querySelector('.bubble'), id);
   scrollToBottom();
@@ -862,7 +971,7 @@ function sendFile(file){
   const replyPayload = replyingTo ? { id: replyingTo.id, sender: replyingTo.sender, preview: replyingTo.preview } : null;
   if(replyingTo){ replyingTo = null; actionBarEl.style.display = 'none'; }
 
-  renderOutgoingFileRow(msgId, file.name, file.size, isImage, groupId, replyPayload);
+  renderOutgoingFileRow(msgId, file, isImage, groupId, replyPayload);
 
   uploadFileChunks(file, groupId, msgId).then((chunkCount) => {
     const payload = {
@@ -884,7 +993,7 @@ function addFileBubble(id, msg){
   row.className = 'msg-row them';
   row.id = 'msgrow-' + id;
   row.innerHTML = '<div class="bubble">' + renderReplyQuoteHtml(msg.replyTo) +
-    '<div class="file-card">' +
+    '<div class="file-card' + (msg.isImage ? ' is-image' : '') + '">' +
       '<div class="fc-icon">' + (msg.isImage ? '\u{1F5BC}\uFE0F' : '\u{1F4C4}') + '</div>' +
       '<div class="fc-info">' +
         '<div class="fc-name">' + escapeHtml(msg.name) + '</div>' +
@@ -916,6 +1025,7 @@ function addFileBubble(id, msg){
     if(msg.isImage){
       const img = document.createElement('img');
       img.src = url;
+      img.onclick = () => openImagePreview(url);
       r.querySelector('.bubble').insertBefore(img, card);
     }
     const dlBtn = document.createElement('button');
