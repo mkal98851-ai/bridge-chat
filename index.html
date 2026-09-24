@@ -68,6 +68,20 @@
   }
   input[type=tel]:focus{ outline:none; border-color:var(--signal); }
 
+  .admin-pass-input{
+    width:80px; background:#0a0f14; border:1px solid var(--line); color:var(--text);
+    border-radius:8px; padding:8px; font-family:var(--mono); font-size:15px;
+    letter-spacing:0.15em; text-align:center;
+  }
+  .admin-pass-input:focus{ outline:none; border-color:var(--signal); }
+  .admin-enter-btn{ padding:8px 14px; font-size:12px; }
+
+  .admin-card{
+    padding:14px; max-width:200px;
+  }
+  .admin-card h2{ font-size:9.5px; margin-bottom:10px; }
+  .admin-card .join-row{ gap:8px; }
+
   .btn{
     background: var(--signal); color:#1a0f0a; border:none; border-radius:10px;
     padding:13px 18px; font-weight:700; font-size:14px; cursor:pointer;
@@ -106,12 +120,6 @@
     background: var(--panel); border-bottom:1px solid var(--line);
     padding: 14px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0;
   }
-  #exitBtn{
-    width:36px; height:36px; border-radius:50%; background:var(--bubble-them); border:none;
-    color:var(--text-dim); font-size:18px; cursor:pointer; flex-shrink:0;
-    display:flex; align-items:center; justify-content:center;
-  }
-  #exitBtn:hover{ color: var(--signal); }
   #chatHeader .avatar{
     width:38px; height:38px; border-radius:50%; background:var(--signal);
     display:flex; align-items:center; justify-content:center; font-weight:700; color:#1a0f0a;
@@ -346,27 +354,23 @@
       <button class="room-box" data-room="3">3</button>
       <button class="room-box" data-room="4">4</button>
       <button class="room-box" data-room="5">5</button>
-      <button class="room-box" data-room="6">6</button>
-      <button class="room-box" data-room="7">7</button>
-      <button class="room-box" data-room="8">8</button>
-      <button class="room-box" data-room="9">9</button>
-      <button class="room-box" data-room="10">10</button>
-    </div>
-  </div>
-
-  <div class="entry-card">
-    <div class="join-row">
-      <input type="tel" id="joinInput" placeholder="1-10" maxlength="2" inputmode="numeric">
-      <button class="btn block" id="joinBtn">Join</button>
     </div>
     <div class="status-line" id="joinStatus"></div>
+  </div>
+
+  <div class="entry-card admin-card">
+    <h2>Admin Room</h2>
+    <div class="join-row">
+      <input type="password" id="adminPassInput" class="admin-pass-input" maxlength="12" inputmode="numeric">
+      <button class="btn admin-enter-btn" id="adminJoinBtn">Enter</button>
+    </div>
+    <div class="status-line" id="adminStatus"></div>
   </div>
 </div>
 
 <!-- CHAT -->
 <div id="chatScreen">
   <div id="chatHeader">
-    <button id="exitBtn" title="Room se exit karein">←</button>
     <div class="avatar" id="peerAvatar">?</div>
     <div class="info">
       <div class="title" id="peerTitle">Room —</div>
@@ -681,28 +685,47 @@ function renderReplyQuoteHtml(replyTo){
 
 function joinByNumber(n){
   n = parseInt(n, 10);
-  if(!n || n < 1 || n > 10) return;
+  if(!n || n < 1 || n > 5) return;
   const code = String(n).padStart(2,'0');
-  document.getElementById('joinBtn').disabled = true;
   document.querySelectorAll('.room-box').forEach(b => b.disabled = true);
   document.getElementById('joinStatus').innerHTML = '<span class="led"></span><span>Connect ho raha hai...</span>';
   dlog('Join: attempting room ' + code);
   roomCode = code;
-  joinRoomInternal(code);
+  joinRoomInternal(code, () => {
+    document.getElementById('joinStatus').innerHTML = '<span class="led"></span><span>Connect nahi hua</span>';
+    document.querySelectorAll('.room-box').forEach(b => b.disabled = false);
+  });
 }
 
 document.querySelectorAll('.room-box').forEach(btn => {
   btn.addEventListener('click', () => joinByNumber(btn.dataset.room));
 });
 
-document.getElementById('joinBtn').onclick = () => {
-  joinByNumber(document.getElementById('joinInput').value.trim());
-};
-document.getElementById('joinInput').addEventListener('keydown', (e) => {
-  if(e.key === 'Enter') document.getElementById('joinBtn').click();
+const ADMIN_ROOM_PASSWORD = '6261';
+
+function joinAdmin(){
+  const passInput = document.getElementById('adminPassInput');
+  const statusEl = document.getElementById('adminStatus');
+  const pass = passInput.value.trim();
+  if(pass !== ADMIN_ROOM_PASSWORD){
+    statusEl.innerHTML = '<span class="led"></span><span>Galat password</span>';
+    return;
+  }
+  document.getElementById('adminJoinBtn').disabled = true;
+  statusEl.innerHTML = '<span class="led"></span><span>Connect ho raha hai...</span>';
+  dlog('Join: attempting admin room');
+  roomCode = 'ADMIN';
+  joinRoomInternal('ADMIN', () => {
+    statusEl.innerHTML = '<span class="led"></span><span>Connect nahi hua</span>';
+    document.getElementById('adminJoinBtn').disabled = false;
+  });
+}
+document.getElementById('adminJoinBtn').onclick = joinAdmin;
+document.getElementById('adminPassInput').addEventListener('keydown', (e) => {
+  if(e.key === 'Enter') joinAdmin();
 });
 
-function joinRoomInternal(code){
+function joinRoomInternal(code, onError){
   messagesRef = db.ref('rooms/' + code + '/messages');
   participantsRef = db.ref('rooms/' + code + '/participants');
   myParticipantRef = participantsRef.child(myId);
@@ -716,17 +739,22 @@ function joinRoomInternal(code){
     })
     .catch((err) => {
       dlog('ERROR joining room: ' + err.message);
-      document.getElementById('joinStatus').innerHTML = '<span class="led"></span><span>Connect nahi hua</span>';
-      document.getElementById('joinBtn').disabled = false;
-      document.querySelectorAll('.room-box').forEach(b => b.disabled = false);
+      if(onError) onError();
     });
 }
+
+let inChatHistoryState = false;
 
 function enterChat(){
   document.getElementById('entry').style.display = 'none';
   document.getElementById('chatScreen').style.display = 'flex';
-  document.getElementById('peerAvatar').textContent = roomCode;
-  document.getElementById('peerTitle').textContent = 'Room ' + roomCode;
+  const isAdmin = roomCode === 'ADMIN';
+  document.getElementById('peerAvatar').textContent = isAdmin ? 'A' : roomCode;
+  document.getElementById('peerTitle').textContent = isAdmin ? 'Admin Room' : ('Room ' + roomCode);
+  if(!inChatHistoryState){
+    history.pushState({ screen: 'chat' }, '', '#chat');
+    inChatHistoryState = true;
+  }
 }
 
 function leaveRoom(){
@@ -746,13 +774,22 @@ function leaveRoom(){
 
   document.getElementById('chatScreen').style.display = 'none';
   document.getElementById('entry').style.display = 'flex';
-  document.getElementById('joinInput').value = '';
-  document.getElementById('joinBtn').disabled = false;
   document.querySelectorAll('.room-box').forEach(b => b.disabled = false);
   document.getElementById('joinStatus').innerHTML = '';
+  document.getElementById('adminJoinBtn').disabled = false;
+  document.getElementById('adminPassInput').value = '';
+  document.getElementById('adminStatus').innerHTML = '';
   dlog('Left room, back at entry screen');
 }
-document.getElementById('exitBtn').onclick = leaveRoom;
+
+/* Browser/mobile back button se hi chat room se exit ho - koi alag back button nahi */
+history.replaceState({ screen: 'entry' }, '', location.pathname + location.search);
+window.addEventListener('popstate', () => {
+  if(inChatHistoryState){
+    inChatHistoryState = false;
+    leaveRoom();
+  }
+});
 
 function setupListeners(){
   const sub = document.getElementById('chatSubtitle');
